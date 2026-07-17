@@ -31,15 +31,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val contentCheckRunnable = object : Runnable {
-        override fun run() {
-            checkContent()
-            if (config.contentCheckInterval > 0) {
-                handler.postDelayed(this, config.contentCheckInterval * 1000L)
-            }
-        }
-    }
-
     private val hideRunnable = Runnable {
         moveTaskToBack(true)
     }
@@ -61,7 +52,6 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 lastContentHash = null
-                handler.postDelayed({ checkContent() }, 3000)
             }
         }
 
@@ -70,11 +60,9 @@ class MainActivity : AppCompatActivity() {
         if (config.refreshInterval > 0) {
             startRefreshTimer()
         }
-        if (config.contentCheckInterval > 0) {
-            startContentCheckTimer()
-        }
 
         startForegroundService(Intent(this, ContentCheckService::class.java))
+        ContentCheckService.scheduleCheck(this)
 
         handleCheckIntent(intent)
     }
@@ -88,7 +76,7 @@ class MainActivity : AppCompatActivity() {
     private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            checkContentAndDecide()
+            handler.postDelayed({ checkContentAndShow() }, 1000)
         }
     }
 
@@ -130,90 +118,55 @@ class MainActivity : AppCompatActivity() {
         handler.postDelayed(refreshRunnable, config.refreshInterval * 1000L)
     }
 
-    private fun startContentCheckTimer() {
-        handler.removeCallbacks(contentCheckRunnable)
-        handler.postDelayed(contentCheckRunnable, config.contentCheckInterval * 1000L)
-    }
-
-    private fun checkContent() {
-        if (webView.url == null) return
-
-        val script = """
-            (function() {
-                var text = document.body ? document.body.innerText : '';
-                text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
-                var hash = 0;
-                for (var i = 0; i < text.length; i++) {
-                    hash = ((hash << 5) - hash) + text.charCodeAt(i);
-                    hash |= 0;
-                }
-                return text.length + ':' + hash;
-            })()
-        """.trimIndent()
-
-        webView.evaluateJavascript(script) { result ->
-            val currentHash = result?.trim('"') ?: return@evaluateJavascript
-            if (currentHash == "0:0" || currentHash == ":") return@evaluateJavascript
-
-            if (lastContentHash == null) {
-                lastContentHash = currentHash
-                return@evaluateJavascript
+    private val HashScript = """
+        (function() {
+            var text = document.body ? document.body.innerText : '';
+            text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
+            var hash = 0;
+            for (var i = 0; i < text.length; i++) {
+                hash = ((hash << 5) - hash) + text.charCodeAt(i);
+                hash |= 0;
             }
+            return text.length + ':' + hash;
+        })()
+    """.trimIndent()
 
-            if (currentHash != lastContentHash) {
-                lastContentHash = currentHash
-                onContentDetected()
-            }
+    private fun checkContentAndShow() {
+        if (webView.url == null) {
+            ContentCheckService.scheduleCheck(this)
+            return
         }
-    }
 
-    private fun checkContentAndDecide() {
-        if (webView.url == null) return
-
-        val script = """
-            (function() {
-                var text = document.body ? document.body.innerText : '';
-                text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
-                var hash = 0;
-                for (var i = 0; i < text.length; i++) {
-                    hash = ((hash << 5) - hash) + text.charCodeAt(i);
-                    hash |= 0;
-                }
-                return text.length + ':' + hash;
-            })()
-        """.trimIndent()
-
-        webView.evaluateJavascript(script) { result ->
-            val currentHash = result?.trim('"') ?: return@evaluateJavascript
-            if (currentHash == "0:0" || currentHash == ":") return@evaluateJavascript
-
-            if (lastContentHash == null) {
-                lastContentHash = currentHash
+        webView.evaluateJavascript(HashScript) { result ->
+            val currentHash = result?.trim('"') ?: ""
+            if (currentHash.isEmpty() || currentHash == "0:0" || currentHash == ":") {
                 ContentCheckService.scheduleCheck(this)
                 return@evaluateJavascript
             }
 
-            if (currentHash != lastContentHash) {
-                lastContentHash = currentHash
-                onContentDetected()
+            val changed = if (lastContentHash == null) {
+                true
             } else {
-                ContentCheckService.scheduleCheck(this)
+                currentHash != lastContentHash
             }
-        }
-    }
+            lastContentHash = currentHash
 
-    private fun onContentDetected() {
-        handler.removeCallbacks(hideRunnable)
+            if (changed) {
+                handler.removeCallbacks(hideRunnable)
+                if (config.hideDelayMinutes > 0) {
+                    handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
+                }
+            } else {
+                moveTaskToBack(true)
+            }
 
-        if (config.hideDelayMinutes > 0) {
-            handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
+            ContentCheckService.scheduleCheck(this)
         }
     }
 
     override fun onResume() {
         super.onResume()
         setupFullScreen()
-        ContentCheckService.scheduleCheck(this)
     }
 
     @Suppress("DEPRECATION")
