@@ -75,6 +75,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         startForegroundService(Intent(this, ContentCheckService::class.java))
+
+        handleCheckIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleCheckIntent(intent)
+    }
+
+    private fun handleCheckIntent(intent: Intent) {
+        if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
+            intent.removeExtra("CHECK_CONTENT")
+            checkContentAndDecide()
+        }
     }
 
     private fun setupFullScreen() {
@@ -152,19 +167,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun checkContentAndDecide() {
+        if (webView.url == null) return
+
+        val script = """
+            (function() {
+                var text = document.body ? document.body.innerText : '';
+                text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
+                var hash = 0;
+                for (var i = 0; i < text.length; i++) {
+                    hash = ((hash << 5) - hash) + text.charCodeAt(i);
+                    hash |= 0;
+                }
+                return text.length + ':' + hash;
+            })()
+        """.trimIndent()
+
+        webView.evaluateJavascript(script) { result ->
+            val currentHash = result?.trim('"') ?: return@evaluateJavascript
+            if (currentHash == "0:0" || currentHash == ":") return@evaluateJavascript
+
+            if (lastContentHash == null) {
+                lastContentHash = currentHash
+                ContentCheckService.scheduleCheck(this)
+                return@evaluateJavascript
+            }
+
+            if (currentHash != lastContentHash) {
+                lastContentHash = currentHash
+                onContentDetected()
+            } else {
+                ContentCheckService.scheduleCheck(this)
+            }
+        }
+    }
+
     private fun onContentDetected() {
         handler.removeCallbacks(hideRunnable)
-
-        if (isTaskRoot && (isFinishing || isDestroyed).not()) {
-            val intent = Intent(this, MainActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK
-                        or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-            }
-            startActivity(intent)
-        }
 
         if (config.hideDelayMinutes > 0) {
             handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
@@ -174,6 +213,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         setupFullScreen()
+        ContentCheckService.scheduleCheck(this)
     }
 
     @Suppress("DEPRECATION")
@@ -189,19 +229,5 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacksAndMessages(null)
         webView.destroy()
         super.onDestroy()
-    }
-
-    companion object {
-        @JvmStatic
-        fun bringToFront(context: android.content.Context) {
-            val intent = Intent(context, MainActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK
-                        or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-            }
-            context.startActivity(intent)
-        }
     }
 }

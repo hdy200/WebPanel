@@ -1,13 +1,18 @@
 package com.webpanel.app.service
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.SystemClock
 import com.webpanel.app.MainActivity
 import com.webpanel.app.SettingsActivity
 import com.webpanel.app.WebPanelApp
+import com.webpanel.app.util.AppConfig
 
 class ContentCheckService : Service() {
 
@@ -19,7 +24,41 @@ class ContentCheckService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_SCHEDULE_CHECK -> scheduleNextCheck()
+            ACTION_SHOW -> showActivity()
+        }
         return START_STICKY
+    }
+
+    private fun scheduleNextCheck() {
+        val config = AppConfig(this)
+        if (config.contentCheckInterval <= 0) return
+
+        val alarmManager = getSystemService(AlarmManager::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 0,
+            Intent(this, CheckReceiver::class.java).apply {
+                action = ACTION_CHECK
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.set(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + config.contentCheckInterval * 1000L,
+            pendingIntent
+        )
+    }
+
+    private fun showActivity() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                    or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+        }
+        startActivity(intent)
     }
 
     private fun createNotification(): Notification {
@@ -44,10 +83,42 @@ class ContentCheckService : Service() {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .addAction(
-                Notification.Action.Builder(
-                    null, "设置", settingsIntent
-                ).build()
+                Notification.Action.Builder(null, "设置", settingsIntent).build()
             )
             .build()
+    }
+
+    companion object {
+        const val ACTION_CHECK = "com.webpanel.app.CHECK"
+        const val ACTION_SHOW = "com.webpanel.app.SHOW"
+        const val ACTION_SCHEDULE_CHECK = "com.webpanel.app.SCHEDULE_CHECK"
+
+        fun scheduleCheck(context: Context) {
+            val intent = Intent(context, ContentCheckService::class.java).apply {
+                action = ACTION_SCHEDULE_CHECK
+            }
+            context.startForegroundService(intent)
+        }
+
+        fun showActivity(context: Context) {
+            val intent = Intent(context, ContentCheckService::class.java).apply {
+                action = ACTION_SHOW
+            }
+            context.startForegroundService(intent)
+        }
+    }
+}
+
+class CheckReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val activityIntent = Intent(context, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                    or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            putExtra("CHECK_CONTENT", true)
+        }
+        context.startActivity(activityIntent)
     }
 }
