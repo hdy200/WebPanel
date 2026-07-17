@@ -15,16 +15,10 @@ public partial class MainWindow : Window
     private const string ContentCheckScript = """
         (function() {
             var text = document.body ? document.body.innerText : '';
-            text = text
-                .replace(/\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\s+\d{1,2}:\d{2}(:\d{2})?/g, '')
-                .replace(/\d{14}/g, '')
-                .replace(/\d{1,2}:\d{2}(:\d{2})?/g, '')
-                .replace(/\s+/g, ' ')
-                .trim();
+            text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
             var hash = 0;
             for (var i = 0; i < text.length; i++) {
-                var ch = text.charCodeAt(i);
-                hash = ((hash << 5) - hash) + ch;
+                hash = ((hash << 5) - hash) + text.charCodeAt(i);
                 hash |= 0;
             }
             return text.length + ':' + hash;
@@ -87,7 +81,7 @@ public partial class MainWindow : Window
             _refreshTimer.Start();
         }
 
-        if (_config.ContentCheckInterval > 0 && _config.HideDelayMinutes > 0)
+        if (_config.ContentCheckInterval > 0)
         {
             _contentCheckTimer.Start();
         }

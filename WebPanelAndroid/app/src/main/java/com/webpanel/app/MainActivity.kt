@@ -21,7 +21,6 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastContentHash: String? = null
-    private var isHiddenByTimer = false
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
@@ -35,17 +34,14 @@ class MainActivity : AppCompatActivity() {
     private val contentCheckRunnable = object : Runnable {
         override fun run() {
             checkContent()
-            if (config.contentCheckInterval > 0 && config.hideDelayMinutes > 0) {
+            if (config.contentCheckInterval > 0) {
                 handler.postDelayed(this, config.contentCheckInterval * 1000L)
             }
         }
     }
 
     private val hideRunnable = Runnable {
-        if (config.hideDelayMinutes > 0) {
-            isHiddenByTimer = true
-            moveTaskToBack(true)
-        }
+        moveTaskToBack(true)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,8 +50,7 @@ class MainActivity : AppCompatActivity() {
 
         config = AppConfig(this)
         webView = findViewById(R.id.webView)
-        val btnSettings = findViewById<View>(R.id.btnSettings)
-        btnSettings.setOnClickListener {
+        findViewById<View>(R.id.btnSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
@@ -65,17 +60,21 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                handler.postDelayed({ checkContent() }, 2000)
+                lastContentHash = null
+                handler.postDelayed({ checkContent() }, 3000)
             }
         }
 
         webView.loadUrl(config.url)
 
-        startRefreshTimer()
-        startContentCheckTimer()
+        if (config.refreshInterval > 0) {
+            startRefreshTimer()
+        }
+        if (config.contentCheckInterval > 0) {
+            startContentCheckTimer()
+        }
 
-        val serviceIntent = Intent(this, ContentCheckService::class.java)
-        startForegroundService(serviceIntent)
+        startForegroundService(Intent(this, ContentCheckService::class.java))
     }
 
     private fun setupFullScreen() {
@@ -87,7 +86,6 @@ class MainActivity : AppCompatActivity() {
                 or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                 or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         )
-
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             window.insetsController?.let {
                 it.hide(android.view.WindowInsets.Type.systemBars())
@@ -114,32 +112,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun startRefreshTimer() {
         handler.removeCallbacks(refreshRunnable)
-        if (config.refreshInterval > 0) {
-            handler.postDelayed(refreshRunnable, config.refreshInterval * 1000L)
-        }
+        handler.postDelayed(refreshRunnable, config.refreshInterval * 1000L)
     }
 
     private fun startContentCheckTimer() {
         handler.removeCallbacks(contentCheckRunnable)
-        if (config.contentCheckInterval > 0 && config.hideDelayMinutes > 0) {
-            handler.postDelayed(contentCheckRunnable, config.contentCheckInterval * 1000L)
-        }
+        handler.postDelayed(contentCheckRunnable, config.contentCheckInterval * 1000L)
     }
 
     private fun checkContent() {
+        if (webView.url == null) return
+
         val script = """
             (function() {
                 var text = document.body ? document.body.innerText : '';
-                text = text
-                    .replace(/\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\s+\d{1,2}:\d{2}(:\d{2})?/g, '')
-                    .replace(/\d{14}/g, '')
-                    .replace(/\d{1,2}:\d{2}(:\d{2})?/g, '')
-                    .replace(/\s+/g, ' ')
-                    .trim();
+                text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
                 var hash = 0;
                 for (var i = 0; i < text.length; i++) {
-                    var ch = text.charCodeAt(i);
-                    hash = ((hash << 5) - hash) + ch;
+                    hash = ((hash << 5) - hash) + text.charCodeAt(i);
                     hash |= 0;
                 }
                 return text.length + ':' + hash;
@@ -148,6 +138,7 @@ class MainActivity : AppCompatActivity() {
 
         webView.evaluateJavascript(script) { result ->
             val currentHash = result?.trim('"') ?: return@evaluateJavascript
+            if (currentHash == "0:0" || currentHash == ":") return@evaluateJavascript
 
             if (lastContentHash == null) {
                 lastContentHash = currentHash
@@ -162,11 +153,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onContentDetected() {
-        isHiddenByTimer = false
         handler.removeCallbacks(hideRunnable)
 
-        if (isTaskRoot) {
-            bringActivityToFront()
+        if (isTaskRoot && (isFinishing || isDestroyed).not()) {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                        or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            startActivity(intent)
         }
 
         if (config.hideDelayMinutes > 0) {
@@ -174,19 +171,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun bringActivityToFront() {
-        if (isFinishing || isDestroyed) return
-        val intent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
-        startActivity(intent)
-    }
-
     override fun onResume() {
         super.onResume()
         setupFullScreen()
     }
 
+    @Suppress("DEPRECATION")
     override fun onBackPressed() {
         if (webView.canGoBack()) {
             webView.goBack()

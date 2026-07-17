@@ -4,16 +4,12 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import com.webpanel.app.MainActivity
 import com.webpanel.app.SettingsActivity
 import com.webpanel.app.WebPanelApp
 
 class ContentCheckService : Service() {
-
-    private val handler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -29,7 +25,9 @@ class ContentCheckService : Service() {
     private fun createNotification(): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
-            Intent(this, MainActivity::class.java),
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -51,10 +49,5 @@ class ContentCheckService : Service() {
                 ).build()
             )
             .build()
-    }
-
-    override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
-        super.onDestroy()
     }
 }
