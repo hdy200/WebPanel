@@ -1,0 +1,16 @@
+# Windows .NET
+WebPanel/bin/
+WebPanel/obj/
+*.user
+*.suo
+
+# Android
+WebPanelAndroid/.gradle/
+WebPanelAndroid/app/build/
+WebPanelAndroid/local.properties
+WebPanelAndroid/.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
