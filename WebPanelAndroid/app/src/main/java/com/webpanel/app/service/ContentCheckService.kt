@@ -2,12 +2,15 @@ package com.webpanel.app.service
 
 import android.app.AlarmManager
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import com.webpanel.app.MainActivity
 import com.webpanel.app.SettingsActivity
@@ -16,17 +19,19 @@ import com.webpanel.app.util.AppConfig
 
 class ContentCheckService : Service() {
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(1, createNotification())
+        startForeground(1, createNotification(false))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SCHEDULE_CHECK -> scheduleNextCheck()
-            ACTION_SHOW -> showActivity()
+            ACTION_CHECK_AND_SHOW -> checkAndShowActivity()
         }
         return START_STICKY
     }
@@ -50,22 +55,67 @@ class ContentCheckService : Service() {
         )
     }
 
-    private fun showActivity() {
-        val intent = Intent(this, MainActivity::class.java).apply {
+    private fun checkAndShowActivity() {
+        acquireWakeLock()
+
+        val activityIntent = Intent(this, MainActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
-                    or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    or Intent.FLAG_ACTIVITY_CLEAR_TOP
                     or Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
+            putExtra("CHECK_CONTENT", true)
+            putExtra("FORCE_SHOW", true)
         }
-        startActivity(intent)
+
+        try {
+            startActivity(activityIntent)
+        } catch (_: Exception) {
+            showHeadsUpNotification()
+        }
     }
 
-    private fun createNotification(): Notification {
+    private fun showHeadsUpNotification() {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 2,
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra("CHECK_CONTENT", true)
+                putExtra("FORCE_SHOW", true)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = Notification.Builder(this, WebPanelApp.HEADS_UP_CHANNEL_ID)
+            .setContentTitle("WebPanel")
+            .setContentText("检测到内容更新，点击查看")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(Notification.PRIORITY_HIGH)
+            .setDefaults(Notification.DEFAULT_ALL)
+            .build()
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(2, notification)
+    }
+
+    private fun acquireWakeLock() {
+        val pm = getSystemService(PowerManager::class.java)
+        wakeLock?.release()
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "webpanel:check_wakelock"
+        ).apply {
+            acquire(10 * 1000L)
+        }
+    }
+
+    private fun createNotification(isAlert: Boolean): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -76,7 +126,7 @@ class ContentCheckService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        return Notification.Builder(this, WebPanelApp.CHANNEL_ID)
+        val builder = Notification.Builder(this, WebPanelApp.CHANNEL_ID)
             .setContentTitle("WebPanel")
             .setContentText("正在监控内容更新")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
@@ -85,12 +135,22 @@ class ContentCheckService : Service() {
             .addAction(
                 Notification.Action.Builder(null, "设置", settingsIntent).build()
             )
-            .build()
+
+        if (isAlert) {
+            builder.setPriority(Notification.PRIORITY_HIGH)
+        }
+
+        return builder.build()
+    }
+
+    override fun onDestroy() {
+        wakeLock?.release()
+        super.onDestroy()
     }
 
     companion object {
         const val ACTION_CHECK = "com.webpanel.app.CHECK"
-        const val ACTION_SHOW = "com.webpanel.app.SHOW"
+        const val ACTION_CHECK_AND_SHOW = "com.webpanel.app.CHECK_AND_SHOW"
         const val ACTION_SCHEDULE_CHECK = "com.webpanel.app.SCHEDULE_CHECK"
 
         fun scheduleCheck(context: Context) {
@@ -100,9 +160,9 @@ class ContentCheckService : Service() {
             context.startForegroundService(intent)
         }
 
-        fun showActivity(context: Context) {
+        fun checkAndShow(context: Context) {
             val intent = Intent(context, ContentCheckService::class.java).apply {
-                action = ACTION_SHOW
+                action = ACTION_CHECK_AND_SHOW
             }
             context.startForegroundService(intent)
         }
@@ -111,14 +171,6 @@ class ContentCheckService : Service() {
 
 class CheckReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        val activityIntent = Intent(context, MainActivity::class.java).apply {
-            addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK
-                    or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            )
-            putExtra("CHECK_CONTENT", true)
-        }
-        context.startActivity(activityIntent)
+        ContentCheckService.checkAndShow(context)
     }
 }

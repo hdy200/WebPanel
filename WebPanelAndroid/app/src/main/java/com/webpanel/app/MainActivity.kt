@@ -22,7 +22,7 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastContentHash: String? = null
-    private var pendingCheck: Boolean = false
+    private var checkInProgress = false
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
@@ -34,7 +34,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val hideRunnable = Runnable {
-        hideApp()
+        finish()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,9 +55,9 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                lastContentHash = null
-                if (pendingCheck) {
-                    pendingCheck = false
+                if (checkInProgress) {
+                    checkInProgress = false
+                    lastContentHash = null
                     handler.postDelayed({ checkContentAndDecide() }, 500)
                 }
             }
@@ -70,7 +70,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         startForegroundService(Intent(this, ContentCheckService::class.java))
-        ContentCheckService.scheduleCheck(this)
 
         handleCheckIntent(intent)
     }
@@ -84,12 +83,16 @@ class MainActivity : AppCompatActivity() {
     private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            showApp()
+            if (intent.getBooleanExtra("FORCE_SHOW", false)) {
+                intent.removeExtra("FORCE_SHOW")
+                showApp()
+            }
             handler.postDelayed({ checkContentAndDecide() }, 1000)
         }
     }
 
     private fun setupFullScreen() {
+        @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_FULLSCREEN
                 or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
@@ -109,9 +112,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupWindowFlags() {
         window.addFlags(
-            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
-                or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-                or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         )
     }
 
@@ -137,18 +138,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showApp() {
         handler.removeCallbacks(hideRunnable)
-        webView.alpha = 1f
-        webView.visibility = View.VISIBLE
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-        )
-    }
-
-    private fun hideApp() {
-        webView.alpha = 0f
-        webView.visibility = View.INVISIBLE
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private val HashScript = """
@@ -166,6 +155,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkContentAndDecide() {
         if (webView.url == null) {
+            checkInProgress = true
             ContentCheckService.scheduleCheck(this)
             return
         }
@@ -191,7 +181,7 @@ class MainActivity : AppCompatActivity() {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
             } else {
-                hideApp()
+                finish()
             }
 
             ContentCheckService.scheduleCheck(this)
