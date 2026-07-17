@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -21,6 +22,7 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastContentHash: String? = null
+    private var pendingCheck: Boolean = false
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
@@ -32,7 +34,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val hideRunnable = Runnable {
-        moveTaskToBack(true)
+        hideApp()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,17 +43,23 @@ class MainActivity : AppCompatActivity() {
 
         config = AppConfig(this)
         webView = findViewById(R.id.webView)
+
         findViewById<View>(R.id.btnSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
         setupFullScreen()
         setupWebView()
+        setupWindowFlags()
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 lastContentHash = null
+                if (pendingCheck) {
+                    pendingCheck = false
+                    handler.postDelayed({ checkContentAndDecide() }, 500)
+                }
             }
         }
 
@@ -76,7 +84,8 @@ class MainActivity : AppCompatActivity() {
     private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            handler.postDelayed({ checkContentAndShow() }, 1000)
+            showApp()
+            handler.postDelayed({ checkContentAndDecide() }, 1000)
         }
     }
 
@@ -96,6 +105,14 @@ class MainActivity : AppCompatActivity() {
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         }
+    }
+
+    private fun setupWindowFlags() {
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
     }
 
     private fun setupWebView() {
@@ -118,6 +135,22 @@ class MainActivity : AppCompatActivity() {
         handler.postDelayed(refreshRunnable, config.refreshInterval * 1000L)
     }
 
+    private fun showApp() {
+        handler.removeCallbacks(hideRunnable)
+        webView.alpha = 1f
+        webView.visibility = View.VISIBLE
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
+    }
+
+    private fun hideApp() {
+        webView.alpha = 0f
+        webView.visibility = View.INVISIBLE
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
     private val HashScript = """
         (function() {
             var text = document.body ? document.body.innerText : '';
@@ -131,7 +164,7 @@ class MainActivity : AppCompatActivity() {
         })()
     """.trimIndent()
 
-    private fun checkContentAndShow() {
+    private fun checkContentAndDecide() {
         if (webView.url == null) {
             ContentCheckService.scheduleCheck(this)
             return
@@ -152,12 +185,13 @@ class MainActivity : AppCompatActivity() {
             lastContentHash = currentHash
 
             if (changed) {
+                showApp()
                 handler.removeCallbacks(hideRunnable)
                 if (config.hideDelayMinutes > 0) {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
             } else {
-                moveTaskToBack(true)
+                hideApp()
             }
 
             ContentCheckService.scheduleCheck(this)
