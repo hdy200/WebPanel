@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
@@ -16,6 +15,8 @@ import com.webpanel.app.MainActivity
 import com.webpanel.app.SettingsActivity
 import com.webpanel.app.WebPanelApp
 import com.webpanel.app.util.AppConfig
+import java.net.HttpURLConnection
+import java.net.URL
 
 class ContentCheckService : Service() {
 
@@ -25,13 +26,13 @@ class ContentCheckService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(1, createNotification(false))
+        startForeground(1, createNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SCHEDULE_CHECK -> scheduleNextCheck()
-            ACTION_CHECK_AND_SHOW -> checkAndShowActivity()
+            ACTION_CHECK_AND_SHOW -> checkAndShow()
         }
         return START_STICKY
     }
@@ -55,9 +56,78 @@ class ContentCheckService : Service() {
         )
     }
 
-    private fun checkAndShowActivity() {
-        acquireWakeLock()
+    private fun checkAndShow() {
+        Thread {
+            acquireWakeLock()
+            try {
+                val config = AppConfig(this)
+                val url = config.url
+                if (url.isEmpty()) {
+                    scheduleNextCheck()
+                    return@Thread
+                }
 
+                val html = fetchPage(url)
+                if (html.isEmpty()) {
+                    scheduleNextCheck()
+                    return@Thread
+                }
+
+                val currentHash = computeHash(html)
+                val lastHash = config.lastContentHash
+
+                if (lastHash.isEmpty()) {
+                    config.lastContentHash = currentHash
+                    scheduleNextCheck()
+                    return@Thread
+                }
+
+                if (currentHash != lastHash) {
+                    config.lastContentHash = currentHash
+                    showActivity()
+                }
+            } catch (_: Exception) {
+            } finally {
+                releaseWakeLock()
+                scheduleNextCheck()
+            }
+        }.start()
+    }
+
+    private fun fetchPage(urlStr: String): String {
+        val url = URL(urlStr)
+        val conn = url.openConnection() as HttpURLConnection
+        conn.connectTimeout = 10_000
+        conn.readTimeout = 10_000
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        return try {
+            val stream = conn.inputStream
+            val bytes = stream.readBytes()
+            stream.close()
+            String(bytes, Charsets.UTF_8)
+        } catch (_: Exception) {
+            ""
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun computeHash(html: String): String {
+        val text = html
+            .replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("\\d{1,2}:\\d{2}(:\\d{2})?"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+        var hash = 0
+        for (i in text.indices) {
+            hash = ((hash shl 5) - hash) + text.codePointAt(i)
+            hash = hash.toInt()
+        }
+        return "${text.length}:$hash"
+    }
+
+    private fun showActivity() {
         val activityIntent = Intent(this, MainActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
@@ -65,9 +135,7 @@ class ContentCheckService : Service() {
                     or Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
             putExtra("CHECK_CONTENT", true)
-            putExtra("FORCE_SHOW", true)
         }
-
         try {
             startActivity(activityIntent)
         } catch (_: Exception) {
@@ -81,7 +149,6 @@ class ContentCheckService : Service() {
             Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 putExtra("CHECK_CONTENT", true)
-                putExtra("FORCE_SHOW", true)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -107,11 +174,18 @@ class ContentCheckService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "webpanel:check_wakelock"
         ).apply {
-            acquire(10 * 1000L)
+            acquire(15 * 1000L)
         }
     }
 
-    private fun createNotification(isAlert: Boolean): Notification {
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+        }
+        wakeLock = null
+    }
+
+    private fun createNotification(): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).apply {
@@ -126,7 +200,7 @@ class ContentCheckService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val builder = Notification.Builder(this, WebPanelApp.CHANNEL_ID)
+        return Notification.Builder(this, WebPanelApp.CHANNEL_ID)
             .setContentTitle("WebPanel")
             .setContentText("正在监控内容更新")
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
@@ -135,17 +209,7 @@ class ContentCheckService : Service() {
             .addAction(
                 Notification.Action.Builder(null, "设置", settingsIntent).build()
             )
-
-        if (isAlert) {
-            builder.setPriority(Notification.PRIORITY_HIGH)
-        }
-
-        return builder.build()
-    }
-
-    override fun onDestroy() {
-        wakeLock?.release()
-        super.onDestroy()
+            .build()
     }
 
     companion object {
@@ -159,18 +223,14 @@ class ContentCheckService : Service() {
             }
             context.startForegroundService(intent)
         }
-
-        fun checkAndShow(context: Context) {
-            val intent = Intent(context, ContentCheckService::class.java).apply {
-                action = ACTION_CHECK_AND_SHOW
-            }
-            context.startForegroundService(intent)
-        }
     }
 }
 
 class CheckReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        ContentCheckService.checkAndShow(context)
+        val serviceIntent = Intent(context, ContentCheckService::class.java).apply {
+            action = ContentCheckService.ACTION_CHECK_AND_SHOW
+        }
+        context.startForegroundService(serviceIntent)
     }
 }

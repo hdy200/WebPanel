@@ -27,4 +27,8 @@ class AppConfig(context: Context) {
     var autoStart: Boolean
         get() = prefs.getBoolean("auto_start", true)
         set(value) = prefs.edit().putBoolean("auto_start", value).apply()
+
+    var lastContentHash: String
+        get() = prefs.getString("last_content_hash", "") ?: ""
+        set(value) = prefs.edit().putString("last_content_hash", value).apply()
 }

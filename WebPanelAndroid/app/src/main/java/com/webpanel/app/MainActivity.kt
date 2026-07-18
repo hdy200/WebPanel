@@ -21,8 +21,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var config: AppConfig
     private val handler = Handler(Looper.getMainLooper())
 
-    private var lastContentHash: String? = null
-    private var checkInProgress = false
+    private val hideRunnable = Runnable {
+        moveTaskToBack(true)
+    }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
@@ -31,10 +32,6 @@ class MainActivity : AppCompatActivity() {
                 handler.postDelayed(this, config.refreshInterval * 1000L)
             }
         }
-    }
-
-    private val hideRunnable = Runnable {
-        finish()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,17 +49,6 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         setupWindowFlags()
 
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                if (checkInProgress) {
-                    checkInProgress = false
-                    lastContentHash = null
-                    handler.postDelayed({ checkContentAndDecide() }, 500)
-                }
-            }
-        }
-
         webView.loadUrl(config.url)
 
         if (config.refreshInterval > 0) {
@@ -70,6 +56,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         startForegroundService(Intent(this, ContentCheckService::class.java))
+        ContentCheckService.scheduleCheck(this)
 
         handleCheckIntent(intent)
     }
@@ -83,11 +70,10 @@ class MainActivity : AppCompatActivity() {
     private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            if (intent.getBooleanExtra("FORCE_SHOW", false)) {
-                intent.removeExtra("FORCE_SHOW")
-                showApp()
+            handler.removeCallbacks(hideRunnable)
+            if (config.hideDelayMinutes > 0) {
+                handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
             }
-            handler.postDelayed({ checkContentAndDecide() }, 1000)
         }
     }
 
@@ -111,9 +97,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupWindowFlags() {
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-        )
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun setupWebView() {
@@ -134,58 +118,6 @@ class MainActivity : AppCompatActivity() {
     private fun startRefreshTimer() {
         handler.removeCallbacks(refreshRunnable)
         handler.postDelayed(refreshRunnable, config.refreshInterval * 1000L)
-    }
-
-    private fun showApp() {
-        handler.removeCallbacks(hideRunnable)
-    }
-
-    private val HashScript = """
-        (function() {
-            var text = document.body ? document.body.innerText : '';
-            text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
-            var hash = 0;
-            for (var i = 0; i < text.length; i++) {
-                hash = ((hash << 5) - hash) + text.charCodeAt(i);
-                hash |= 0;
-            }
-            return text.length + ':' + hash;
-        })()
-    """.trimIndent()
-
-    private fun checkContentAndDecide() {
-        if (webView.url == null) {
-            checkInProgress = true
-            ContentCheckService.scheduleCheck(this)
-            return
-        }
-
-        webView.evaluateJavascript(HashScript) { result ->
-            val currentHash = result?.trim('"') ?: ""
-            if (currentHash.isEmpty() || currentHash == "0:0" || currentHash == ":") {
-                ContentCheckService.scheduleCheck(this)
-                return@evaluateJavascript
-            }
-
-            val changed = if (lastContentHash == null) {
-                true
-            } else {
-                currentHash != lastContentHash
-            }
-            lastContentHash = currentHash
-
-            if (changed) {
-                showApp()
-                handler.removeCallbacks(hideRunnable)
-                if (config.hideDelayMinutes > 0) {
-                    handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
-                }
-            } else {
-                finish()
-            }
-
-            ContentCheckService.scheduleCheck(this)
-        }
     }
 
     override fun onResume() {
