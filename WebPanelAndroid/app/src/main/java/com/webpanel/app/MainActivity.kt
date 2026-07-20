@@ -6,7 +6,6 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.WindowInsetsController
-import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -21,6 +20,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rootView: View
     private lateinit var config: AppConfig
     private val handler = Handler(Looper.getMainLooper())
+
+    private var lastContentHash: String? = null
 
     private val hideRunnable = Runnable {
         rootView.visibility = View.INVISIBLE
@@ -52,6 +53,13 @@ class MainActivity : AppCompatActivity() {
         setupFullScreen()
         setupWebView()
 
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                lastContentHash = null
+            }
+        }
+
         webView.loadUrl(config.url)
 
         if (config.refreshInterval > 0) {
@@ -78,12 +86,53 @@ class MainActivity : AppCompatActivity() {
     private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            rootView.visibility = View.VISIBLE
-            webView.reload()
-            handler.removeCallbacks(hideRunnable)
-            if (config.hideDelayMinutes > 0) {
-                handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
+            checkContentAndDecide()
+        }
+    }
+
+    private val HashScript = """
+        (function() {
+            var text = document.body ? document.body.innerText : '';
+            text = text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, '').replace(/\s+/g, ' ').trim();
+            var hash = 0;
+            for (var i = 0; i < text.length; i++) {
+                hash = ((hash << 5) - hash) + text.charCodeAt(i);
+                hash |= 0;
             }
+            return text.length + ':' + hash;
+        })()
+    """.trimIndent()
+
+    private fun checkContentAndDecide() {
+        if (webView.url == null) {
+            ContentCheckService.scheduleCheck(this)
+            return
+        }
+
+        webView.evaluateJavascript(HashScript) { result ->
+            val currentHash = result?.trim('"') ?: ""
+            if (currentHash.isEmpty() || currentHash == "0:0" || currentHash == ":") {
+                ContentCheckService.scheduleCheck(this)
+                return@evaluateJavascript
+            }
+
+            val changed = if (lastContentHash == null) {
+                true
+            } else {
+                currentHash != lastContentHash
+            }
+            lastContentHash = currentHash
+
+            if (changed) {
+                rootView.visibility = View.VISIBLE
+                webView.reload()
+                handler.removeCallbacks(hideRunnable)
+                if (config.hideDelayMinutes > 0) {
+                    handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
+                }
+            }
+
+            ContentCheckService.scheduleCheck(this)
         }
     }
 
@@ -117,11 +166,6 @@ class MainActivity : AppCompatActivity() {
             cacheMode = WebSettings.LOAD_DEFAULT
             allowContentAccess = true
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        }
-        webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                return false
-            }
         }
         webView.webChromeClient = WebChromeClient()
     }

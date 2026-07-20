@@ -9,18 +9,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.os.PowerManager
 import android.os.SystemClock
 import com.webpanel.app.MainActivity
 import com.webpanel.app.SettingsActivity
 import com.webpanel.app.WebPanelApp
-import com.webpanel.app.util.AppConfig
-import java.net.HttpURLConnection
-import java.net.URL
 
 class ContentCheckService : Service() {
-
-    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -32,14 +26,15 @@ class ContentCheckService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SCHEDULE_CHECK -> scheduleNextCheck()
-            ACTION_CHECK_AND_SHOW -> checkAndShow()
+            ACTION_CHECK_AND_SHOW -> forwardCheckToActivity()
         }
         return START_STICKY
     }
 
     private fun scheduleNextCheck() {
-        val config = AppConfig(this)
-        if (config.contentCheckInterval <= 0) return
+        val prefs = getSharedPreferences("webpanel_config", MODE_PRIVATE)
+        val interval = prefs.getInt("content_check_interval", 30)
+        if (interval <= 0) return
 
         val alarmManager = getSystemService(AlarmManager::class.java)
         val pendingIntent = PendingIntent.getBroadcast(
@@ -51,83 +46,12 @@ class ContentCheckService : Service() {
         )
         alarmManager.set(
             AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + config.contentCheckInterval * 1000L,
+            SystemClock.elapsedRealtime() + interval * 1000L,
             pendingIntent
         )
     }
 
-    private fun checkAndShow() {
-        Thread {
-            acquireWakeLock()
-            try {
-                val config = AppConfig(this)
-                val url = config.url
-                if (url.isEmpty()) {
-                    scheduleNextCheck()
-                    return@Thread
-                }
-
-                val html = fetchPage(url)
-                if (html.isEmpty()) {
-                    scheduleNextCheck()
-                    return@Thread
-                }
-
-                val currentHash = computeHash(html)
-                val lastHash = config.lastContentHash
-
-                if (lastHash.isEmpty()) {
-                    config.lastContentHash = currentHash
-                    scheduleNextCheck()
-                    return@Thread
-                }
-
-                if (currentHash != lastHash) {
-                    config.lastContentHash = currentHash
-                    showActivity()
-                }
-            } catch (_: Exception) {
-            } finally {
-                releaseWakeLock()
-                scheduleNextCheck()
-            }
-        }.start()
-    }
-
-    private fun fetchPage(urlStr: String): String {
-        val url = URL(urlStr)
-        val conn = url.openConnection() as HttpURLConnection
-        conn.connectTimeout = 10_000
-        conn.readTimeout = 10_000
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-        return try {
-            val stream = conn.inputStream
-            val bytes = stream.readBytes()
-            stream.close()
-            String(bytes, Charsets.UTF_8)
-        } catch (_: Exception) {
-            ""
-        } finally {
-            conn.disconnect()
-        }
-    }
-
-    private fun computeHash(html: String): String {
-        val text = html
-            .replace(Regex("<[^>]+>"), " ")
-            .replace(Regex("\\d{1,2}:\\d{2}(:\\d{2})?"), "")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-
-        var hash = 0
-        for (i in text.indices) {
-            hash = ((hash shl 5) - hash) + text.codePointAt(i)
-            hash = hash.toInt()
-        }
-        return "${text.length}:$hash"
-    }
-
-    private fun showActivity() {
+    private fun forwardCheckToActivity() {
         val activityIntent = Intent(this, MainActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
@@ -147,7 +71,7 @@ class ContentCheckService : Service() {
         val pendingIntent = PendingIntent.getActivity(
             this, 2,
             Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 putExtra("CHECK_CONTENT", true)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -165,24 +89,6 @@ class ContentCheckService : Service() {
 
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(2, notification)
-    }
-
-    private fun acquireWakeLock() {
-        val pm = getSystemService(PowerManager::class.java)
-        wakeLock?.release()
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "webpanel:check_wakelock"
-        ).apply {
-            acquire(15 * 1000L)
-        }
-    }
-
-    private fun releaseWakeLock() {
-        wakeLock?.let {
-            if (it.isHeld) it.release()
-        }
-        wakeLock = null
     }
 
     private fun createNotification(): Notification {
