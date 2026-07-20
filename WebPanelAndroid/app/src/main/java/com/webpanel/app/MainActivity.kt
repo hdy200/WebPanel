@@ -1,7 +1,5 @@
 package com.webpanel.app
 
-import android.graphics.Color
-import android.graphics.drawable.ColorDrawable
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -22,15 +20,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var config: AppConfig
     private val handler = Handler(Looper.getMainLooper())
-    private var isAppVisible = true
 
     private val hideRunnable = Runnable {
-        hideApp()
+        webView.visibility = View.INVISIBLE
     }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            if (isAppVisible && webView.url != null) {
+            if (webView.visibility == View.VISIBLE && webView.url != null) {
                 webView.reload()
             }
             if (config.refreshInterval > 0) {
@@ -52,7 +49,6 @@ class MainActivity : AppCompatActivity() {
 
         setupFullScreen()
         setupWebView()
-        setupWindowFlags()
 
         webView.loadUrl(config.url)
 
@@ -80,40 +76,12 @@ class MainActivity : AppCompatActivity() {
     private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            showApp()
+            webView.visibility = View.VISIBLE
+            handler.removeCallbacks(hideRunnable)
+            if (config.hideDelayMinutes > 0) {
+                handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
+            }
         }
-    }
-
-    private fun showApp() {
-        isAppVisible = true
-        handler.removeCallbacks(hideRunnable)
-
-        webView.visibility = View.VISIBLE
-        webView.alpha = 1f
-
-        window.decorView.setBackgroundColor(Color.BLACK)
-        window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
-        window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-
-        setupFullScreen()
-
-        if (config.hideDelayMinutes > 0) {
-            handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
-        }
-    }
-
-    private fun hideApp() {
-        isAppVisible = false
-        handler.removeCallbacks(hideRunnable)
-
-        webView.visibility = View.INVISIBLE
-        webView.alpha = 0f
-
-        window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        )
     }
 
     private fun setupFullScreen() {
@@ -133,10 +101,6 @@ class MainActivity : AppCompatActivity() {
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         }
-    }
-
-    private fun setupWindowFlags() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun setupWebView() {
@@ -166,9 +130,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (isAppVisible) {
-            setupFullScreen()
-        }
+        setupFullScreen()
     }
 
     @Suppress("DEPRECATION")
