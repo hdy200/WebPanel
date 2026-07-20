@@ -18,16 +18,17 @@ import com.webpanel.app.util.AppConfig
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var rootView: View
     private lateinit var config: AppConfig
     private val handler = Handler(Looper.getMainLooper())
 
     private val hideRunnable = Runnable {
-        webView.visibility = View.INVISIBLE
+        rootView.visibility = View.INVISIBLE
     }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            if (webView.visibility == View.VISIBLE && webView.url != null) {
+            if (rootView.visibility == View.VISIBLE && webView.url != null) {
                 webView.reload()
             }
             if (config.refreshInterval > 0) {
@@ -42,6 +43,7 @@ class MainActivity : AppCompatActivity() {
 
         config = AppConfig(this)
         webView = findViewById(R.id.webView)
+        rootView = findViewById(R.id.rootView)
 
         findViewById<View>(R.id.btnSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -76,7 +78,8 @@ class MainActivity : AppCompatActivity() {
     private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            webView.visibility = View.VISIBLE
+            rootView.visibility = View.VISIBLE
+            webView.reload()
             handler.removeCallbacks(hideRunnable)
             if (config.hideDelayMinutes > 0) {
                 handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
