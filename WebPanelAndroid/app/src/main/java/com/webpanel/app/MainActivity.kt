@@ -130,11 +130,26 @@ class MainActivity : AppCompatActivity() {
 
             if (changed) {
                 showContentChangedNotification()
+                bringToFront()
                 handler.removeCallbacks(hideRunnable)
                 if (config.hideDelayMinutes > 0) {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
             }
+        }
+    }
+
+    private fun bringToFront() {
+        try {
+            val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                        or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            startActivity(intent)
+        } catch (_: Exception) {
         }
     }
 
