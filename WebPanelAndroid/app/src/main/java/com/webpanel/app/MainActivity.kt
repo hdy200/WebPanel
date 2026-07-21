@@ -38,6 +38,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val contentCheckRunnable = object : Runnable {
+        override fun run() {
+            checkContentAndDecide()
+            if (config.contentCheckInterval > 0) {
+                handler.postDelayed(this, config.contentCheckInterval * 1000L)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -66,10 +75,10 @@ class MainActivity : AppCompatActivity() {
             startRefreshTimer()
         }
 
+        startContentCheckTimer()
+
         startForegroundService(Intent(this, ContentCheckService::class.java))
         ContentCheckService.scheduleCheck(this)
-
-        handleCheckIntent(intent)
 
         if (config.hideDelayMinutes > 0) {
             handler.removeCallbacks(hideRunnable)
@@ -80,13 +89,16 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleCheckIntent(intent)
-    }
-
-    private fun handleCheckIntent(intent: Intent) {
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
             checkContentAndDecide()
+        }
+    }
+
+    private fun startContentCheckTimer() {
+        handler.removeCallbacks(contentCheckRunnable)
+        if (config.contentCheckInterval > 0) {
+            handler.postDelayed(contentCheckRunnable, config.contentCheckInterval * 1000L)
         }
     }
 
@@ -104,15 +116,11 @@ class MainActivity : AppCompatActivity() {
     """.trimIndent()
 
     private fun checkContentAndDecide() {
-        if (webView.url == null) {
-            ContentCheckService.scheduleCheck(this)
-            return
-        }
+        if (webView.url == null) return
 
         webView.evaluateJavascript(HashScript) { result ->
             val currentHash = result?.trim('"') ?: ""
             if (currentHash.isEmpty() || currentHash == "0:0" || currentHash == ":") {
-                ContentCheckService.scheduleCheck(this)
                 return@evaluateJavascript
             }
 
@@ -131,8 +139,6 @@ class MainActivity : AppCompatActivity() {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
             }
-
-            ContentCheckService.scheduleCheck(this)
         }
     }
 
