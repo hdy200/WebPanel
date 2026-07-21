@@ -17,32 +17,24 @@ import com.webpanel.app.util.AppConfig
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
-    private lateinit var rootView: View
     private lateinit var config: AppConfig
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastContentHash: String? = null
+    private var isInFront = true
 
     private val hideRunnable = Runnable {
-        rootView.visibility = View.INVISIBLE
+        isInFront = false
+        moveTaskToBack(true)
     }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            if (rootView.visibility == View.VISIBLE && webView.url != null) {
+            if (isInFront && webView.url != null) {
                 webView.reload()
             }
             if (config.refreshInterval > 0) {
                 handler.postDelayed(this, config.refreshInterval * 1000L)
-            }
-        }
-    }
-
-    private val contentCheckRunnable = object : Runnable {
-        override fun run() {
-            checkContentAndDecide()
-            if (config.contentCheckInterval > 0) {
-                handler.postDelayed(this, config.contentCheckInterval * 1000L)
             }
         }
     }
@@ -53,7 +45,6 @@ class MainActivity : AppCompatActivity() {
 
         config = AppConfig(this)
         webView = findViewById(R.id.webView)
-        rootView = findViewById(R.id.rootView)
 
         findViewById<View>(R.id.btnSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -75,13 +66,10 @@ class MainActivity : AppCompatActivity() {
             startRefreshTimer()
         }
 
-        startContentCheckTimer()
-
         startForegroundService(Intent(this, ContentCheckService::class.java))
         ContentCheckService.scheduleCheck(this)
 
         if (config.hideDelayMinutes > 0) {
-            handler.removeCallbacks(hideRunnable)
             handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
         }
     }
@@ -91,14 +79,7 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            checkContentAndDecide()
-        }
-    }
-
-    private fun startContentCheckTimer() {
-        handler.removeCallbacks(contentCheckRunnable)
-        if (config.contentCheckInterval > 0) {
-            handler.postDelayed(contentCheckRunnable, config.contentCheckInterval * 1000L)
+            checkContentAndDecide(hideIfUnchanged = true)
         }
     }
 
@@ -115,12 +96,16 @@ class MainActivity : AppCompatActivity() {
         })()
     """.trimIndent()
 
-    private fun checkContentAndDecide() {
-        if (webView.url == null) return
+    private fun checkContentAndDecide(hideIfUnchanged: Boolean = false) {
+        if (webView.url == null) {
+            if (hideIfUnchanged) moveTaskToBack(true)
+            return
+        }
 
         webView.evaluateJavascript(HashScript) { result ->
             val currentHash = result?.trim('"') ?: ""
             if (currentHash.isEmpty() || currentHash == "0:0" || currentHash == ":") {
+                if (hideIfUnchanged) moveTaskToBack(true)
                 return@evaluateJavascript
             }
 
@@ -132,12 +117,12 @@ class MainActivity : AppCompatActivity() {
             lastContentHash = currentHash
 
             if (changed) {
-                rootView.visibility = View.VISIBLE
-                webView.reload()
                 handler.removeCallbacks(hideRunnable)
                 if (config.hideDelayMinutes > 0) {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
+            } else if (hideIfUnchanged) {
+                moveTaskToBack(true)
             }
         }
     }
@@ -183,6 +168,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isInFront = true
         setupFullScreen()
     }
 
