@@ -1,10 +1,6 @@
 package com.webpanel.app
 
-import android.app.Notification
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Intent
-import android.media.RingtoneManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -21,18 +17,20 @@ import com.webpanel.app.util.AppConfig
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var rootView: View
     private lateinit var config: AppConfig
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastContentHash: String? = null
+    private var isHidden = false
 
     private val hideRunnable = Runnable {
-        moveTaskToBack(true)
+        hideApp()
     }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            if (webView.url != null) {
+            if (!isHidden && webView.url != null) {
                 webView.reload()
             }
             if (config.refreshInterval > 0) {
@@ -56,6 +54,7 @@ class MainActivity : AppCompatActivity() {
 
         config = AppConfig(this)
         webView = findViewById(R.id.webView)
+        rootView = findViewById(R.id.rootView)
 
         findViewById<View>(R.id.btnSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -99,6 +98,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun hideApp() {
+        isHidden = true
+        rootView.visibility = View.INVISIBLE
+        window.setBackgroundDrawableResource(android.R.color.transparent)
+    }
+
+    private fun showApp() {
+        isHidden = false
+        handler.removeCallbacks(hideRunnable)
+        rootView.visibility = View.VISIBLE
+        window.setBackgroundDrawableResource(android.R.color.black)
+        setupFullScreen()
+        if (config.hideDelayMinutes > 0) {
+            handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
+        }
+    }
+
     private val HashScript = """
         (function() {
             var text = document.body ? document.body.innerText : '';
@@ -129,56 +145,14 @@ class MainActivity : AppCompatActivity() {
             lastContentHash = currentHash
 
             if (changed) {
-                showContentChangedNotification()
-                bringToFront()
+                showApp()
+                webView.reload()
                 handler.removeCallbacks(hideRunnable)
                 if (config.hideDelayMinutes > 0) {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
             }
         }
-    }
-
-    private fun bringToFront() {
-        try {
-            val intent = Intent(applicationContext, MainActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK
-                        or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-            }
-            startActivity(intent)
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun showContentChangedNotification() {
-        val pendingIntent = PendingIntent.getActivity(
-            this, 10,
-            Intent(this, MainActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK
-                        or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = Notification.Builder(this, WebPanelApp.HEADS_UP_CHANNEL_ID)
-            .setContentTitle("WebPanel - 内容更新")
-            .setContentText("检测到新内容，点击查看")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setPriority(Notification.PRIORITY_HIGH)
-            .setDefaults(Notification.DEFAULT_VIBRATE)
-            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
-            .build()
-
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(99, notification)
     }
 
     private fun setupFullScreen() {
@@ -227,7 +201,9 @@ class MainActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (webView.canGoBack()) {
+        if (isHidden) {
+            showApp()
+        } else if (webView.canGoBack()) {
             webView.goBack()
         } else {
             moveTaskToBack(true)
