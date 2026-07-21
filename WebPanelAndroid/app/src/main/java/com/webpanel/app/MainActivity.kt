@@ -1,12 +1,14 @@
 package com.webpanel.app
 
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
-import android.graphics.PixelFormat
+import android.media.RingtoneManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import android.view.WindowManager
 import android.view.WindowInsetsController
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -23,19 +25,27 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastContentHash: String? = null
-    private var isHidden = false
 
     private val hideRunnable = Runnable {
-        hideApp()
+        moveTaskToBack(true)
     }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            if (!isHidden && webView.url != null) {
+            if (webView.url != null) {
                 webView.reload()
             }
             if (config.refreshInterval > 0) {
                 handler.postDelayed(this, config.refreshInterval * 1000L)
+            }
+        }
+    }
+
+    private val contentCheckRunnable = object : Runnable {
+        override fun run() {
+            checkContentAndDecide()
+            if (config.contentCheckInterval > 0) {
+                handler.postDelayed(this, config.contentCheckInterval * 1000L)
             }
         }
     }
@@ -67,6 +77,8 @@ class MainActivity : AppCompatActivity() {
             startRefreshTimer()
         }
 
+        startContentCheckTimer()
+
         startForegroundService(Intent(this, ContentCheckService::class.java))
         ContentCheckService.scheduleCheck(this)
 
@@ -78,30 +90,12 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
-            intent.removeExtra("CHECK_CONTENT")
-            showApp()
-            checkContentAndDecide()
-        }
     }
 
-    private fun hideApp() {
-        isHidden = true
-        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        window.attributes.format = PixelFormat.TRANSLUCENT
-        window.setBackgroundDrawableResource(android.R.color.transparent)
-    }
-
-    private fun showApp() {
-        isHidden = false
-        handler.removeCallbacks(hideRunnable)
-        window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        window.setBackgroundDrawableResource(android.R.color.black)
-        setupFullScreen()
-        if (config.hideDelayMinutes > 0) {
-            handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
+    private fun startContentCheckTimer() {
+        handler.removeCallbacks(contentCheckRunnable)
+        if (config.contentCheckInterval > 0) {
+            handler.postDelayed(contentCheckRunnable, config.contentCheckInterval * 1000L)
         }
     }
 
@@ -135,14 +129,41 @@ class MainActivity : AppCompatActivity() {
             lastContentHash = currentHash
 
             if (changed) {
-                showApp()
-                webView.reload()
+                showContentChangedNotification()
                 handler.removeCallbacks(hideRunnable)
                 if (config.hideDelayMinutes > 0) {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
             }
         }
+    }
+
+    private fun showContentChangedNotification() {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 10,
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                        or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = Notification.Builder(this, WebPanelApp.HEADS_UP_CHANNEL_ID)
+            .setContentTitle("WebPanel - 内容更新")
+            .setContentText("检测到新内容，点击查看")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(Notification.PRIORITY_HIGH)
+            .setDefaults(Notification.DEFAULT_VIBRATE)
+            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+            .build()
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(99, notification)
     }
 
     private fun setupFullScreen() {
@@ -191,9 +212,7 @@ class MainActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (isHidden) {
-            showApp()
-        } else if (webView.canGoBack()) {
+        if (webView.canGoBack()) {
             webView.goBack()
         } else {
             moveTaskToBack(true)
