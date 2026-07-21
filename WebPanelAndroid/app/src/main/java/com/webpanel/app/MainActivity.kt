@@ -1,6 +1,10 @@
 package com.webpanel.app
 
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
+import android.media.RingtoneManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -118,6 +122,7 @@ class MainActivity : AppCompatActivity() {
             lastContentHash = currentHash
 
             if (changed) {
+                showContentChangedNotification(currentHash)
                 handler.removeCallbacks(hideRunnable)
                 if (config.hideDelayMinutes > 0) {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
@@ -126,6 +131,30 @@ class MainActivity : AppCompatActivity() {
                 moveTaskToBack(true)
             }
         }
+    }
+
+    private fun showContentChangedNotification(hash: String) {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 10,
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = Notification.Builder(this, WebPanelApp.HEADS_UP_CHANNEL_ID)
+            .setContentTitle("WebPanel - 内容更新")
+            .setContentText("检测到新内容，请点击查看\nhash: $hash")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(Notification.PRIORITY_HIGH)
+            .setDefaults(Notification.DEFAULT_VIBRATE)
+            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+            .build()
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(99, notification)
     }
 
     private fun setupFullScreen() {
