@@ -1,10 +1,12 @@
 package com.webpanel.app
 
 import android.content.Intent
+import android.graphics.PixelFormat
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.WindowManager
 import android.view.WindowInsetsController
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -21,16 +23,15 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
 
     private var lastContentHash: String? = null
-    private var isInFront = true
+    private var isHidden = false
 
     private val hideRunnable = Runnable {
-        isInFront = false
-        moveTaskToBack(true)
+        hideApp()
     }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            if (isInFront && webView.url != null) {
+            if (!isHidden && webView.url != null) {
                 webView.reload()
             }
             if (config.refreshInterval > 0) {
@@ -79,8 +80,28 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
-            ContentCheckService.scheduleCheck(this)
-            checkContentAndDecide(hideIfUnchanged = true)
+            showApp()
+            checkContentAndDecide()
+        }
+    }
+
+    private fun hideApp() {
+        isHidden = true
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        window.attributes.format = PixelFormat.TRANSLUCENT
+        window.setBackgroundDrawableResource(android.R.color.transparent)
+    }
+
+    private fun showApp() {
+        isHidden = false
+        handler.removeCallbacks(hideRunnable)
+        window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        window.setBackgroundDrawableResource(android.R.color.black)
+        setupFullScreen()
+        if (config.hideDelayMinutes > 0) {
+            handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
         }
     }
 
@@ -97,16 +118,12 @@ class MainActivity : AppCompatActivity() {
         })()
     """.trimIndent()
 
-    private fun checkContentAndDecide(hideIfUnchanged: Boolean = false) {
-        if (webView.url == null) {
-            if (hideIfUnchanged) moveTaskToBack(true)
-            return
-        }
+    private fun checkContentAndDecide() {
+        if (webView.url == null) return
 
         webView.evaluateJavascript(HashScript) { result ->
             val currentHash = result?.trim('"') ?: ""
             if (currentHash.isEmpty() || currentHash == "0:0" || currentHash == ":") {
-                if (hideIfUnchanged) moveTaskToBack(true)
                 return@evaluateJavascript
             }
 
@@ -118,12 +135,12 @@ class MainActivity : AppCompatActivity() {
             lastContentHash = currentHash
 
             if (changed) {
+                showApp()
+                webView.reload()
                 handler.removeCallbacks(hideRunnable)
                 if (config.hideDelayMinutes > 0) {
                     handler.postDelayed(hideRunnable, config.hideDelayMinutes * 60 * 1000L)
                 }
-            } else if (hideIfUnchanged) {
-                moveTaskToBack(true)
             }
         }
     }
@@ -169,13 +186,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        isInFront = true
         setupFullScreen()
     }
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (webView.canGoBack()) {
+        if (isHidden) {
+            showApp()
+        } else if (webView.canGoBack()) {
             webView.goBack()
         } else {
             moveTaskToBack(true)
