@@ -79,6 +79,7 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         if (intent.getBooleanExtra("CHECK_CONTENT", false)) {
             intent.removeExtra("CHECK_CONTENT")
+            ContentCheckService.scheduleCheck(this)
             checkContentAndDecide(hideIfUnchanged = true)
         }
     }

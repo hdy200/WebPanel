@@ -37,14 +37,19 @@ class ContentCheckService : Service() {
         if (interval <= 0) return
 
         val alarmManager = getSystemService(AlarmManager::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            this, 0,
-            Intent(this, CheckReceiver::class.java).apply {
-                action = ACTION_CHECK
-            },
+        val activityIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                    or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            putExtra("CHECK_CONTENT", true)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, activityIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        alarmManager.set(
+        alarmManager.setAndAllowWhileIdle(
             AlarmManager.ELAPSED_REALTIME_WAKEUP,
             SystemClock.elapsedRealtime() + interval * 1000L,
             pendingIntent
